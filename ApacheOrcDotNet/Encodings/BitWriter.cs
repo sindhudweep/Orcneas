@@ -1,0 +1,40 @@
+﻿using System.Collections.Generic;
+using System.IO;
+
+namespace ApacheOrcDotNet.Encodings
+{
+    public class BitWriter
+    {
+        private readonly ByteRunLengthEncodingWriter _byteWriter;
+
+        public BitWriter(Stream outputStream)
+        {
+            _byteWriter = new ByteRunLengthEncodingWriter(outputStream);
+        }
+
+        public void Write(IList<bool> values)
+        {
+            var numBytes = values.Count / 8;
+            if (values.Count % 8 != 0)
+                numBytes++;
+            var bytes = new byte[numBytes];
+
+            var byteIndex = 0;
+            var bitIndex = 7;
+            foreach (var value in values)
+            {
+                if (value)
+                    bytes[byteIndex] |= (byte) (1 << bitIndex);
+                bitIndex--;
+
+                if (bitIndex == -1)
+                {
+                    bitIndex = 7;
+                    byteIndex++;
+                }
+            }
+
+            _byteWriter.Write(bytes);
+        }
+    }
+}
