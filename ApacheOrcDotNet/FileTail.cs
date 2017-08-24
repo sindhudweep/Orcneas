@@ -1,4 +1,6 @@
-﻿using System.IO;
+﻿using System;
+using System.IO;
+using System.IO.MemoryMappedFiles;
 using ApacheOrcDotNet.Compression;
 using ApacheOrcDotNet.Infrastructure;
 using ApacheOrcDotNet.Protocol;
@@ -8,16 +10,33 @@ using Stream = System.IO.Stream;
 
 namespace ApacheOrcDotNet
 {
-    public class FileTail
+    public class FileTail : IDisposable
     {
-        private readonly Stream _inputStream;
+        private readonly MemoryMappedFile _input;
+        private readonly MemoryMappedViewStream _inputStream;
         public PostScript PostScript { get; }
         public Footer Footer { get; }
         public Metadata Metadata { get; }
 
-        public FileTail(Stream inputStream)
+
+        private static MemoryMappedFile AsMemoryMappedFile(Func<Stream> streamResolver, Func<long> lengthProvider)
         {
-            _inputStream = inputStream;
+            var stream = streamResolver();
+            var length = lengthProvider();
+            var mmf = MemoryMappedFile.CreateNew(Guid.NewGuid().ToString(), length);
+            using (var mmvs = mmf.CreateViewStream(0, length))
+            {
+                stream.CopyTo(mmvs);
+            }
+            return mmf;
+        }
+
+        public FileTail(Stream input) : this(() => input, () => input.Length) { }
+        public FileTail(Func<Stream> streamResolver, Func<long> lengthProvider) : this(AsMemoryMappedFile(streamResolver, lengthProvider), lengthProvider()) { }
+        private FileTail(MemoryMappedFile input, long length)
+        {
+            _input = input;
+            _inputStream = _input.CreateViewStream(0, length);
             var (postScript, postScriptLength) =_inputStream.ReadPostScript();
             PostScript = postScript;
             Footer = ReadFooter(PostScript, postScriptLength);
@@ -47,6 +66,12 @@ namespace ApacheOrcDotNet
         public StripeReaderCollection GetStripeCollection()
         {
             return new StripeReaderCollection(_inputStream, Footer, PostScript.Compression);
+        }
+
+        public void Dispose()
+        {
+            _inputStream.Dispose();
+            _input.Dispose();
         }
     }
 }

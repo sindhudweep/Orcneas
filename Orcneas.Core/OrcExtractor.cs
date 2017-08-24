@@ -2,6 +2,7 @@
 using Microsoft.Analytics.Interfaces;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.MemoryMappedFiles;
 using System.Linq;
 using ApacheOrcDotNet.Protocol;
 using ApacheOrcDotNet.Stripes;
@@ -35,26 +36,29 @@ namespace Orcneas.Core
             {
                 throw new ArgumentOutOfRangeException(nameof(input), "Input stream must be seekable for ORC reader. Enable the hack to copy to a Memory Stream or to a non-Persisted Memory Mapped file. The hack is the default setting.");
             }
-            
-            var fileTail = new FileTail(input);
-            var stripes = fileTail.GetStripeCollection();
 
-            var columnsToRead = GetIntersectedColumnMetadata(output.Schema, fileTail).ToArray();
-
-            foreach (var stripe in stripes)
+            using (var fileTail = new FileTail(input))
             {
-                var extractedColumns = ReadStripe(stripe, columnsToRead).ToArray();
+                var stripes = fileTail.GetStripeCollection();
 
-                for (int i = 0; i < (int) stripe.NumRows; i++)
+                var columnsToRead = GetIntersectedColumnMetadata(output.Schema, fileTail).ToArray();
+
+                foreach (var stripe in stripes)
                 {
-                    foreach (var col in extractedColumns)
+                    var extractedColumns = ReadStripe(stripe, columnsToRead).ToArray();
+
+                    for (int i = 0; i < (int)stripe.NumRows; i++)
                     {
-                        var outputColumn = col.Item1.USqlProjectionColumnIndex;
-                        var value = col.Item2?.GetValue(i) ?? col.Item1.USqlProjectionColumn.DefaultValue;
-                        output.Set(outputColumn, value);
+                        foreach (var col in extractedColumns)
+                        {
+                            var outputColumn = col.Item1.USqlProjectionColumnIndex;
+                            var value = col.Item2?.GetValue(i) ?? col.Item1.USqlProjectionColumn.DefaultValue;
+                            output.Set(outputColumn, value);
+                        }
+                        yield return output.AsReadOnly();
                     }
-                    yield return output.AsReadOnly();
                 }
+
             }
         }
 
@@ -71,6 +75,13 @@ namespace Orcneas.Core
                     return ms;
                 case SeekableInputStreamHackMode.ReflectIntoBaseStream:
                     throw new NotImplementedException();
+                case SeekableInputStreamHackMode.MemoryMappedFile:
+                    var mmf = MemoryMappedFile.CreateNew(Guid.NewGuid().ToString(), input.Length);
+                    using (var mmvs = mmf.CreateViewStream(0, input.Length, MemoryMappedFileAccess.Write))
+                    {
+                        input.BaseStream.CopyTo(mmvs);
+                    }
+                    return mmf.CreateViewStream(0, input.Length, MemoryMappedFileAccess.Read);
                 default:
                     throw new NotImplementedException();
             }
@@ -106,6 +117,11 @@ namespace Orcneas.Core
                         var timeReader = new ApacheOrcDotNet.ColumnTypes.TimestampReader(stripeStreams, column.OrcColumnIndex);
                         var timeData = timeReader.Read().ToArray();
                         results.Add((column, timeData));
+                        break;
+                    case ColumnTypeKind.Long:
+                        var longReader = new ApacheOrcDotNet.ColumnTypes.LongReader(stripeStreams, column.OrcColumnIndex);
+                        var longData = longReader.Read().ToArray();
+                        results.Add((column, longData));
                         break;
                     default:
                         throw new NotImplementedException($"Unsupported Column Type. {column.ColumnTypeKind}");
@@ -148,7 +164,8 @@ namespace Orcneas.Core
         {
             Disabled = 0, //Will not work with current ADLA code.
             CopyToMemoryStream = 1, //Default, but incures the cost of allocating and copying into a memory stream for seeking purposes.
-            ReflectIntoBaseStream = 2 //Doesn't copy the entire input stream into memory, but brittle.
+            ReflectIntoBaseStream = 2, //Doesn't copy the entire input stream into memory, but brittle.
+            MemoryMappedFile = 3
         }
     }
 }
