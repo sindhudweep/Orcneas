@@ -118,6 +118,11 @@ namespace Orcneas.Core
                         var timeData = timeReader.Read().ToArray();
                         results.Add((column, timeData));
                         break;
+                    case ColumnTypeKind.Long:
+                        var longReader = new ApacheOrcDotNet.ColumnTypes.LongReader(stripeStreams, column.OrcColumnIndex);
+                        var longData = longReader.Read().ToArray();
+                        results.Add((column, longData));
+                        break;
                     default:
                         throw new NotImplementedException($"Unsupported Column Type. {column.ColumnTypeKind}");
                 }
